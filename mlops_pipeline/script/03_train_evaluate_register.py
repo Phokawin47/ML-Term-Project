@@ -88,7 +88,7 @@ def train_evaluate_register():
                 mlflow.log_param("learning_rate", config['lr'])
                 mlflow.log_param("dropout_rate", config['dropout'])
                 mlflow.log_param("batch_size", 32)
-                mlflow.log_param("max_epochs", 100)
+                mlflow.log_param("max_epochs", 1)
                 mlflow.log_param("early_stopping_patience", 5)
                 
                 # Create and compile model
@@ -107,7 +107,7 @@ def train_evaluate_register():
                 # Train model
                 history = model.fit(
                     train_gen, 
-                    epochs=100, 
+                    epochs=1, 
                     validation_data=val_gen, 
                     callbacks=[early_stopping],
                     verbose=1
