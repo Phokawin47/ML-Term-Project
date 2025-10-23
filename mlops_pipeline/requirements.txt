@@ -1,0 +1,1 @@
+pip install numpy mlflow scikit-learn pandas requests

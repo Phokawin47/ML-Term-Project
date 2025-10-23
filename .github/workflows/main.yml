@@ -1,0 +1,180 @@
+name: Mushroom Classification MLOps Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM for monitoring
+  workflow_dispatch:  # Manual trigger
+
+env:
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+  MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+  MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+
+jobs:
+  data-validation:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.9']
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install tensorflow scikit-learn mlflow pandas numpy
+    
+    - name: Run Data Validation
+      run: python mlops_pipeline/script/01_data_validation.py
+      continue-on-error: false
+
+  data-preprocessing:
+    needs: data-validation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install tensorflow scikit-learn mlflow pandas numpy
+    
+    - name: Run Data Preprocessing
+      run: python mlops_pipeline/script/02_data_preprocessing.py
+
+  model-training:
+    needs: data-preprocessing
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install tensorflow scikit-learn mlflow pandas numpy
+    
+    - name: Train and Evaluate Models
+      run: python mlops_pipeline/script/03_train_evaluate_register.py
+    
+    - name: Transition Best Model
+      run: python mlops_pipeline/script/04_transition_model.py
+
+  monitoring:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install tensorflow scikit-learn mlflow pandas numpy scipy
+    
+    - name: Run Monitoring Pipeline
+      run: python mlops_pipeline/script/05_monitoring_strategy.py
+    
+    - name: Check Retraining Trigger
+      id: check_retrain
+      run: |
+        # Check if retraining is needed from monitoring output
+        echo "retrain_needed=true" >> $GITHUB_OUTPUT
+
+  automated-retraining:
+    needs: monitoring
+    runs-on: ubuntu-latest
+    if: needs.monitoring.outputs.retrain_needed == 'true'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install tensorflow scikit-learn mlflow pandas numpy
+    
+    - name: Run Automated Retraining
+      run: |
+        python mlops_pipeline/script/02_data_preprocessing.py
+        python mlops_pipeline/script/03_train_evaluate_register.py
+        python mlops_pipeline/script/04_transition_model.py
+
+  deployment-check:
+    needs: [model-training]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install mlflow
+    
+    - name: Check Model Deployment Status
+      run: |
+        python -c "
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        
+        client = MlflowClient()
+        try:
+            model_name = 'mushroom-classifier'
+            latest_versions = client.get_latest_versions(model_name, stages=['Production'])
+            if latest_versions:
+                print('Model mushroom-classifier is ready for production')
+                print('Version: ' + latest_versions[0].version)
+            else:
+                print('No production model found for mushroom-classifier')
+        except Exception as e:
+            print('Error checking model: ' + str(e))
+        "
+
+  notify:
+    needs: [data-validation, data-preprocessing, model-training, deployment-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Pipeline Status Notification
+      shell: bash
+      run: |
+        if [[ "${{ needs.data-validation.result }}" == "success" ]] && 
+           [[ "${{ needs.data-preprocessing.result }}" == "success" ]] && 
+           [[ "${{ needs.model-training.result }}" == "success" ]]; then
+          echo "MLOps Pipeline completed successfully"
+        else
+          echo "MLOps Pipeline failed"
+          exit 1
+        fi
